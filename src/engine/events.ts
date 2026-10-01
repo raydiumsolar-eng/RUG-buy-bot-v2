@@ -1,5 +1,6 @@
 /** Every alert family the bot can emit. */
 export const ALERT_KINDS = [
+  'buy',
   'spike',
   'whale',
   'launch',
@@ -18,6 +19,7 @@ export function isAlertKind(value: string): value is AlertKind {
 
 /** Short labels for the settings keyboard. */
 export const KIND_LABELS: Record<AlertKind, string> = {
+  buy: 'Buy alerts',
   spike: 'Volume spikes',
   whale: 'Whale trades',
   launch: 'New launches',
@@ -30,6 +32,7 @@ export const KIND_LABELS: Record<AlertKind, string> = {
 
 /** One-line explanations shown in the alert-type panel. */
 export const KIND_DESCRIPTIONS: Record<AlertKind, string> = {
+  buy: 'every buy of a token on your token watchlist',
   spike: 'a token trades a multiple of its own normal minute',
   whale: 'a single trade above your dollar threshold',
   launch: 'a new token launches on NOXA or The Odyssey',
@@ -75,6 +78,35 @@ interface BaseAlert {
   /** Unix seconds. */
   at: number
   context: MarketContext
+}
+
+/** Every individual buy of a watched token. */
+export interface BuyAlert extends BaseAlert {
+  kind: 'buy'
+
+  /** Dollar value of this individual buy. */
+  usd: number
+
+  /** Address that performed the buy. */
+  buyer: string
+
+  /** Transaction containing the buy. */
+  txHash: string
+
+  /** DEX / launchpad where the buy happened. */
+  venue: 'uniswap-v3' | 'odyssey-curve'
+
+  /** Pool address when known. */
+  pool: string | null
+
+  /** Number of tokens bought, when available from the decoded trade. */
+  tokenAmount: number | null
+
+  /** Quote amount, e.g. amount of WETH/ETH spent, when available. */
+  quoteAmount: number | null
+
+  /** Symbol of the quote asset, e.g. ETH or USDG. */
+  quoteSymbol: string | null
 }
 
 /** Rolling-minute volume ran a multiple above the token's learned normal. */
@@ -159,6 +191,7 @@ export interface PerformanceAlert extends BaseAlert {
 }
 
 export type Alert =
+  | BuyAlert
   | SpikeAlert
   | WhaleAlert
   | LaunchAlert
@@ -180,6 +213,8 @@ export function audienceOf(alert: Alert): string[] | null {
 /** Stable dedup fingerprint, used to suppress repeats inside a TTL. */
 export function fingerprint(alert: Alert): string {
   switch (alert.kind) {
+    case 'buy':
+      return `buy:${alert.txHash}:${alert.token}`
     case 'spike':
       return `spike:${alert.token}:${Math.round(alert.multiple)}`
     case 'whale':
