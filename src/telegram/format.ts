@@ -9,6 +9,14 @@ export function fmtUsd(n: number): string {
   return `$${n.toFixed(2)}`
 }
 
+/** Exact USD amount for individual BUY alerts. */
+export function fmtBuyUsd(n: number): string {
+  return `$${n.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
 /** Price with 3 significant digits: $0.0000376, $0.0262, $1.05, $23.40. */
 export function fmtPrice(n: number): string {
   if (n <= 0 || !Number.isFinite(n)) return '$0'
@@ -85,6 +93,7 @@ function title(alert: Alert): string {
 /** The price/market lines shared by most cards, as blockquote content. */
 function statLines(context: MarketContext, extra: string[] = []): string[] {
   const lines: string[] = []
+
   if (context.priceUsd > 0) {
     const parts = [`Price ${fmtPrice(context.priceUsd)}`]
     if (context.d1m !== null) parts.push(`1m ${fmtPct(context.d1m)}`)
@@ -92,6 +101,7 @@ function statLines(context: MarketContext, extra: string[] = []): string[] {
     if (context.d1h !== null) parts.push(`1h ${fmtPct(context.d1h)}`)
     lines.push(parts.join('  '))
   }
+
   lines.push(...extra)
 
   const market: string[] = []
@@ -129,12 +139,94 @@ export function renderAlertHtml(alert: Alert): string {
   const warning = alert.context.devSold === true ? '\n⚠️ dev sold' : ''
 
   switch (alert.kind) {
+    case 'buy': {
+      const symbol = alert.symbol
+        ? escapeHtml(alert.symbol)
+        : shortAddr(alert.token)
+
+      // One green square per $250, minimum 1, maximum 20.
+      const squareCount = Math.max(
+        1,
+        Math.min(20, Math.ceil(alert.usd / 250)),
+      )
+      const squares = '🟩'.repeat(squareCount)
+
+      let quoteLine = ''
+
+      if (alert.quoteAmount !== null) {
+        const quoteSymbol =
+          alert.quoteSymbol === 'WETH'
+            ? 'ETH'
+            : alert.quoteSymbol ?? 'ETH'
+
+        quoteLine =
+          `💰 <b>${alert.quoteAmount.toLocaleString('en-US', {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 4,
+          })} ${escapeHtml(quoteSymbol)}</b>`
+      }
+
+      const tokenLine =
+        alert.tokenAmount !== null
+          ? `🪙 <b>${alert.tokenAmount.toLocaleString('en-US', {
+              maximumFractionDigits: 2,
+            })} $${symbol}</b>`
+          : `🪙 <b>$${symbol}</b>`
+
+      const priceLine =
+        alert.context.priceUsd > 0
+          ? `💲 Price: <b>${fmtPrice(alert.context.priceUsd)}</b>`
+          : ''
+
+      const mcapLine =
+        alert.context.mcapUsd !== null
+          ? `💎 MC: <b>${fmtUsd(alert.context.mcapUsd)}</b>`
+          : ''
+
+      const buyerLine = alert.buyer
+        ? `👤 <a href="${explorerAddressUrl(alert.buyer)}">${shortAddr(alert.buyer)}</a>`
+        : ''
+
+      const venue =
+        alert.venue === 'odyssey-curve'
+          ? 'The Odyssey'
+          : 'Uniswap V3'
+
+      const links = [
+        `<a href="${explorerTxUrl(alert.txHash)}">🔎 TX</a>`,
+        `<a href="${dexScreenerUrl(alert.token)}">📈 CHART</a>`,
+      ]
+
+      return [
+        `🟢🟢🟢 <b>$${symbol} BUY!</b>`,
+
+        [quoteLine, `💵 <b>${fmtBuyUsd(alert.usd)}</b>`]
+          .filter(Boolean)
+          .join('\n'),
+
+        [tokenLine, priceLine, mcapLine]
+          .filter(Boolean)
+          .join('\n'),
+
+        buyerLine,
+
+        squares,
+
+        `🏊 ${venue}\n⛓ Robinhood Chain`,
+
+        links.join('   '),
+      ]
+        .filter(Boolean)
+        .join('\n\n')
+    }
+
     case 'spike': {
       const head = `${emojiForSpike(alert.multiple)} ${title(alert)}`
       const spike = `<b>${fmtMult(alert.multiple)} volume</b> · ${fmtUsd(alert.volumeUsd)} in 1m vs ${fmtUsd(
         alert.baselinePerMin,
       )}/min normal · Robinhood`
       const swaps = `Swaps ${alert.swaps} (${fmtMult(alert.swapsMultiple)} normal)  buys ${alert.buys} / sells ${alert.sells}`
+
       return [
         `${head}\n${spike}`,
         `${block(statLines(alert.context, [swaps]))}${warning}`,
@@ -148,7 +240,11 @@ export function renderAlertHtml(alert: Alert): string {
       const line = `<b>${fmtUsd(alert.usd)} ${alert.side}</b> · ${
         alert.venue === 'odyssey-curve' ? 'Odyssey curve' : 'Uniswap v3'
       } · Robinhood`
-      const trader = alert.trader ? [`Trader ${shortAddr(alert.trader)}`] : []
+
+      const trader = alert.trader
+        ? [`Trader ${shortAddr(alert.trader)}`]
+        : []
+
       return [
         `${head}\n${line}`,
         `${block(statLines(alert.context, trader))}${warning}`,
@@ -162,29 +258,46 @@ export function renderAlertHtml(alert: Alert): string {
     case 'launch': {
       const head = `\u{1F331} <b>New launch</b> ${title(alert)}`
       const line = `${escapeHtml(alert.launchpadName)} · Robinhood`
+
       const lines = [
         `Creator ${shortAddr(alert.creator)}`,
-        alert.pool ? `Pool ${shortAddr(alert.pool)}` : 'Trading on the curve until it graduates',
+        alert.pool
+          ? `Pool ${shortAddr(alert.pool)}`
+          : 'Trading on the curve until it graduates',
       ]
-      return [`${head}\n${line}`, block(lines), footer(alert, defaultLinks(alert.token))].join('\n')
+
+      return [
+        `${head}\n${line}`,
+        block(lines),
+        footer(alert, defaultLinks(alert.token)),
+      ].join('\n')
     }
 
     case 'graduation': {
       const head = `\u{1F393} <b>Graduated</b> ${title(alert)}`
-      const line = 'The curve filled; liquidity migrated to a locked Uniswap v3 pool.'
+      const line =
+        'The curve filled; liquidity migrated to a locked Uniswap v3 pool.'
+
       return [
         `${head}\n${line}`,
-        block([`Pool ${shortAddr(alert.pool)}`, ...statLines(alert.context)]),
+        block([
+          `Pool ${shortAddr(alert.pool)}`,
+          ...statLines(alert.context),
+        ]),
         footer(alert, defaultLinks(alert.token)),
       ].join('\n')
     }
 
     case 'price_move': {
       const up = alert.pct >= 0
-      const head = `${up ? '\u{1F4C8}' : '\u{1F4C9}'} ${title(alert)}`
-      const line = `<b>${fmtPct(alert.pct)} in ${alert.windowMinutes}m</b> · ${fmtPrice(alert.fromUsd)} to ${fmtPrice(
-        alert.toUsd,
-      )} · Robinhood`
+
+      const head =
+        `${up ? '\u{1F4C8}' : '\u{1F4C9}'} ${title(alert)}`
+
+      const line =
+        `<b>${fmtPct(alert.pct)} in ${alert.windowMinutes}m</b> · ` +
+        `${fmtPrice(alert.fromUsd)} to ${fmtPrice(alert.toUsd)} · Robinhood`
+
       return [
         `${head}\n${line}`,
         `${block(statLines(alert.context))}${warning}`,
@@ -193,10 +306,13 @@ export function renderAlertHtml(alert: Alert): string {
     }
 
     case 'liquidity_pull': {
-      const head = `\u{1F6A8} <b>Liquidity pulled</b> ${title(alert)}`
-      const line = `<b>-${alert.droppedPct.toFixed(1)}%</b> · ${fmtUsd(alert.beforeUsd)} to ${fmtUsd(
-        alert.afterUsd,
-      )} · Robinhood`
+      const head =
+        `\u{1F6A8} <b>Liquidity pulled</b> ${title(alert)}`
+
+      const line =
+        `<b>-${alert.droppedPct.toFixed(1)}%</b> · ` +
+        `${fmtUsd(alert.beforeUsd)} to ${fmtUsd(alert.afterUsd)} · Robinhood`
+
       return [
         `${head}\n${line}`,
         `${block(statLines(alert.context))}${warning}`,
@@ -205,9 +321,17 @@ export function renderAlertHtml(alert: Alert): string {
     }
 
     case 'wallet_trade': {
-      const who = alert.walletLabel ? escapeHtml(alert.walletLabel) : shortAddr(alert.wallet)
-      const head = `\u{1F464} <b>${who}</b> ${alert.side === 'buy' ? 'bought' : 'sold'} ${title(alert)}`
-      const line = `<b>${fmtUsd(alert.usd)} ${alert.side}</b> · Robinhood`
+      const who = alert.walletLabel
+        ? escapeHtml(alert.walletLabel)
+        : shortAddr(alert.wallet)
+
+      const head =
+        `\u{1F464} <b>${who}</b> ` +
+        `${alert.side === 'buy' ? 'bought' : 'sold'} ${title(alert)}`
+
+      const line =
+        `<b>${fmtUsd(alert.usd)} ${alert.side}</b> · Robinhood`
+
       return [
         `${head}\n${line}`,
         `${block(statLines(alert.context))}${warning}`,
@@ -220,13 +344,20 @@ export function renderAlertHtml(alert: Alert): string {
     }
 
     case 'performance': {
-      const head = `\u{1F3C6} ${title(alert)} hit <b>${fmtMult(alert.milestone)}</b>`
-      const line = `${fmtPrice(alert.entryPriceUsd)} to ${fmtPrice(alert.peakPriceUsd)} in ${fmtAge(
-        alert.elapsedS,
-      )} since the alert`
+      const head =
+        `\u{1F3C6} ${title(alert)} hit <b>${fmtMult(alert.milestone)}</b>`
+
+      const line =
+        `${fmtPrice(alert.entryPriceUsd)} to ` +
+        `${fmtPrice(alert.peakPriceUsd)} in ` +
+        `${fmtAge(alert.elapsedS)} since the alert`
+
       return [
         `${head}\n${line}`,
-        block([`Peak ${fmtMult(alert.multiple)} from the alert price`, ...statLines(alert.context).slice(1)]),
+        block([
+          `Peak ${fmtMult(alert.multiple)} from the alert price`,
+          ...statLines(alert.context).slice(1),
+        ]),
         footer(alert, defaultLinks(alert.token)),
       ].join('\n')
     }
